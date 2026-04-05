@@ -1,0 +1,50 @@
+{% extends "base.html" %}
+{% block title %}History – RainCast{% endblock %}
+{% block content %}
+<div class="page-wrap">
+  <div class="page-header">
+    <h2>Prediction History</h2>
+    <p>All past predictions for your account.</p>
+  </div>
+
+  {% if records %}
+  <div class="card">
+    <table class="data-table">
+      <thead>
+        <tr>
+          <th>#</th>
+          <th>Location</th>
+          <th>Prediction</th>
+          <th>Best Model</th>
+          <th>Accuracy</th>
+          <th>Precision</th>
+          <th>Recall</th>
+          <th>F1</th>
+          <th>Date</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in records %}
+        {% set mr = r.model_results_parsed.get(r.best_model, {}) %}
+        <tr>
+          <td>{{ loop.index }}</td>
+          <td title="{{ r.location }}">{{ r.location[:40] }}{% if r.location|length > 40 %}…{% endif %}</td>
+          <td><span class="badge {{ 'rain' if r.prediction=='Rain' else 'norain' }}">{{ r.prediction }}</span></td>
+          <td>{{ r.best_model }}</td>
+          <td>{{ (mr.get('accuracy',0)*100)|round(1) }}%</td>
+          <td>{{ (mr.get('precision',0)*100)|round(1) }}%</td>
+          <td>{{ (mr.get('recall',0)*100)|round(1) }}%</td>
+          <td>{{ (mr.get('f1',0)*100)|round(1) }}%</td>
+          <td>{{ r.created_at.strftime('%Y-%m-%d %H:%M') }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="card empty-state">
+    <p>No predictions yet. Go to the <a href="{{ url_for('dashboard') }}">Dashboard</a> to run your first prediction.</p>
+  </div>
+  {% endif %}
+</div>
+{% endblock %}

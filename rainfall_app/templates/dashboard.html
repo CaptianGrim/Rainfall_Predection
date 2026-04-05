@@ -1,0 +1,226 @@
+{% extends "base.html" %}
+{% block title %}Dashboard – RainCast{% endblock %}
+{% block head %}
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+{% endblock %}
+{% block content %}
+<div class="page-wrap">
+  <div class="page-header">
+    <h2>Rainfall Prediction Dashboard</h2>
+    <p>Click a point on the map or search for a location, then run the prediction.</p>
+  </div>
+
+  <div class="dashboard-grid">
+    <!-- Left: map + search -->
+    <div class="card">
+      <h3>Select Location</h3>
+      <div class="search-row">
+        <input type="text" id="search-input" placeholder="Search city…" />
+        <button class="btn-primary" onclick="searchLocation()">Search</button>
+      </div>
+      <div id="map"></div>
+      <div id="selected-location" class="location-tag" style="display:none"></div>
+      <button class="btn-primary full-w mt" id="predict-btn" onclick="runPrediction()" disabled>
+        Run Prediction
+      </button>
+    </div>
+
+    <!-- Right: results -->
+    <div class="card" id="result-card" style="display:none">
+      <h3>Prediction Result</h3>
+      <div id="synthetic-warn" style="display:none" class="alert alert-warn">
+        ⚠ <span id="synthetic-reason">Using synthetic demo data — Open-Meteo API unreachable.</span>
+        Results are illustrative only.
+        <a href="https://archive-api.open-meteo.com" target="_blank" style="margin-left:6px">Test API ↗</a>
+      </div>
+      <div id="result-box" class="result-box"></div>
+      <div id="model-table-wrap"></div>
+      <div id="importance-wrap"></div>
+    </div>
+  </div>
+
+  <!-- Loader overlay -->
+  <div id="loader" class="loader-overlay" style="display:none">
+    <div class="loader-box">
+      <div class="spinner"></div>
+      <p>Fetching weather data &amp; training models…</p>
+    </div>
+  </div>
+
+  {% if history %}
+  <div class="card mt">
+    <h3>Recent Predictions</h3>
+    <table class="data-table">
+      <thead>
+        <tr><th>Location</th><th>Prediction</th><th>Best Model</th><th>Accuracy</th><th>Date</th></tr>
+      </thead>
+      <tbody>
+        {% for r in history %}
+        <tr>
+          <td title="{{ r.location }}">{{ r.location[:45] }}{% if r.location|length > 45 %}…{% endif %}</td>
+          <td><span class="badge {{ 'rain' if r.prediction=='Rain' else 'norain' }}">{{ r.prediction }}</span></td>
+          <td>{{ r.best_model }}</td>
+          <td>{{ (r.best_accuracy * 100)|round(1) }}%</td>
+          <td>{{ r.created_at.strftime('%Y-%m-%d %H:%M') }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% endif %}
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+let map, marker, selectedLat, selectedLon, selectedName;
+
+map = L.map('map').setView([20, 78], 4);
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+  attribution: '© OpenStreetMap contributors', maxZoom: 18
+}).addTo(map);
+
+map.on('click', function(e) {
+  placeMarker(e.latlng.lat, e.latlng.lng);
+  reverseGeocode(e.latlng.lat, e.latlng.lng);
+});
+
+function placeMarker(lat, lon) {
+  if (marker) marker.remove();
+  marker = L.marker([lat, lon]).addTo(map);
+  selectedLat = lat; selectedLon = lon;
+  document.getElementById('predict-btn').disabled = false;
+}
+
+function reverseGeocode(lat, lon) {
+  fetch(`https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lon}&format=json`)
+    .then(r => r.json())
+    .then(d => { selectedName = d.display_name || `${lat.toFixed(3)},${lon.toFixed(3)}`; showTag(); })
+    .catch(() => { selectedName = `${lat.toFixed(3)}, ${lon.toFixed(3)}`; showTag(); });
+}
+
+function showTag() {
+  const el = document.getElementById('selected-location');
+  el.textContent = '📍 ' + selectedName;
+  el.style.display = 'block';
+}
+
+function searchLocation() {
+  const q = document.getElementById('search-input').value.trim();
+  if (!q) return;
+  fetch(`https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(q)}&format=json&limit=1`)
+    .then(r => r.json())
+    .then(data => {
+      if (!data.length) { alert('Location not found.'); return; }
+      const { lat, lon, display_name } = data[0];
+      map.setView([+lat, +lon], 10);
+      placeMarker(+lat, +lon);
+      selectedName = display_name;
+      showTag();
+    });
+}
+
+document.getElementById('search-input').addEventListener('keydown', e => {
+  if (e.key === 'Enter') searchLocation();
+});
+
+function runPrediction() {
+  document.getElementById('loader').style.display = 'flex';
+  document.getElementById('predict-btn').disabled = true;
+
+  fetch('/predict', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ location: selectedName, lat: selectedLat, lon: selectedLon })
+  })
+  .then(r => r.json())
+  .then(data => {
+    document.getElementById('loader').style.display = 'none';
+    document.getElementById('predict-btn').disabled = false;
+    if (data.error) { alert('Error: ' + data.error); return; }
+    renderResult(data);
+  })
+  .catch(() => {
+    document.getElementById('loader').style.display = 'none';
+    document.getElementById('predict-btn').disabled = false;
+    alert('Request failed. Is the Flask server running?');
+  });
+}
+
+function renderResult(data) {
+  const card = document.getElementById('result-card');
+  card.style.display = 'block';
+  card.scrollIntoView({ behavior: 'smooth', block: 'start' });
+
+  // Synthetic data warning
+  const warnEl = document.getElementById('synthetic-warn');
+  const reasonEl = document.getElementById('synthetic-reason');
+  if (data.synthetic_data) {
+    const reasons = {
+      'proxy':      'A proxy/firewall is blocking the Open-Meteo API.',
+      'ssl':        'SSL error connecting to Open-Meteo API.',
+      'connection': 'No internet — cannot reach Open-Meteo API.',
+      'timeout':    'Open-Meteo API timed out (try again).',
+      'bad_data':   'API returned insufficient data for this location.',
+    };
+    reasonEl.textContent = '⚠ Using synthetic demo data — '
+      + (reasons[data.api_fail_reason] || 'Open-Meteo API unreachable.');
+    warnEl.style.display = 'block';
+  } else {
+    warnEl.style.display = 'none';
+  }
+
+  // Main result
+  const isRain = data.prediction === 'Rain';
+  document.getElementById('result-box').innerHTML = `
+    <div class="result-icon">${isRain ? '🌧' : '☀️'}</div>
+    <div class="result-label ${isRain ? 'rain-label' : 'norain-label'}">${data.prediction}</div>
+    <div class="result-meta">Confidence: <strong>${data.confidence}%</strong></div>
+    <div class="result-meta">Best model: <strong>${data.best_model}</strong></div>
+    <div class="result-meta">Trained on <strong>${data.data_points}</strong> days of historical data</div>
+  `;
+
+  // Model comparison table
+  const mr = data.model_results;
+  const rows = Object.entries(mr).map(([name, m]) => `
+    <tr class="${name === data.best_model ? 'best-row' : ''}">
+      <td>${name === data.best_model ? '★ ' : ''}${name}</td>
+      <td>${(m.accuracy*100).toFixed(1)}%</td>
+      <td>${(m.precision*100).toFixed(1)}%</td>
+      <td>${(m.recall*100).toFixed(1)}%</td>
+      <td>${(m.f1*100).toFixed(1)}%</td>
+    </tr>`).join('');
+
+  document.getElementById('model-table-wrap').innerHTML = `
+    <h4 style="margin-top:1.2rem;margin-bottom:.6rem">Model Comparison</h4>
+    <table class="data-table">
+      <thead><tr><th>Model</th><th>Accuracy</th><th>Precision</th><th>Recall</th><th>F1</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>`;
+
+  // Feature importances (bar chart)
+  if (data.importances) {
+    const sorted = Object.entries(data.importances)
+      .sort((a, b) => b[1] - a[1]).slice(0, 8);
+    const maxVal = sorted[0][1];
+    const bars = sorted.map(([feat, val]) => {
+      const pct = ((val / maxVal) * 100).toFixed(1);
+      const label = feat.replace(/_/g, ' ');
+      return `<div class="imp-row">
+        <span class="imp-label">${label}</span>
+        <div class="imp-bar-wrap">
+          <div class="imp-bar" style="width:${pct}%"></div>
+        </div>
+        <span class="imp-val">${(val*100).toFixed(1)}%</span>
+      </div>`;
+    }).join('');
+    document.getElementById('importance-wrap').innerHTML = `
+      <h4 style="margin-top:1.2rem;margin-bottom:.6rem">Feature Importances (${data.best_model})</h4>
+      <div class="imp-chart">${bars}</div>`;
+  } else {
+    document.getElementById('importance-wrap').innerHTML = '';
+  }
+}
+</script>
+{% endblock %}

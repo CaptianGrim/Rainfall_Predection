@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>{% block title %}RainCast{% endblock %}</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}"/>
+  {% block head %}{% endblock %}
+</head>
+<body>
+  {% if session.user_id %}
+  <nav class="navbar">
+    <span class="nav-brand">&#127783; RainCast</span>
+    <div class="nav-links">
+      <a href="{{ url_for('dashboard') }}" {% if request.endpoint=="dashboard" %}class="active"{% endif %}>Dashboard</a>
+      <a href="{{ url_for('history') }}" {% if request.endpoint=="history" %}class="active"{% endif %}>History</a>
+      <span class="nav-user">{{ session.username }}</span>
+      <a href="{{ url_for('logout') }}" class="btn-logout">Logout</a>
+    </div>
+  </nav>
+  {% endif %}
+  {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}{% for cat, msg in messages %}
+      <div class="alert alert-{{ cat }}">{{ msg }}</div>
+    {% endfor %}{% endif %}
+  {% endwith %}
+  <main>{% block content %}{% endblock %}</main>
+  {% block scripts %}{% endblock %}
+</body>
+</html>
